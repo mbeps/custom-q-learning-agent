@@ -1,24 +1,44 @@
+# mlLearningCraigAgents.py
+# parsons/27-mar-2017
+#
+# A stub for a reinforcement learning agent to work with the Pacman
+# piece of the Berkeley AI project:
+#
+# http://ai.berkeley.edu/reinforcement.html
+#
+# As required by the licensing agreement for the PacMan AI we have:
+#
+# Licensing Information:  You are free to use or extend these projects for
+# educational purposes provided that (1) you do not distribute or publish
+# solutions, (2) you retain this notice, and (3) you provide clear
+# attribution to UC Berkeley, including a link to http://ai.berkeley.edu.
+#
+# Attribution Information: The Pacman AI projects were developed at UC Berkeley.
+# The core projects and autograders were primarily created by John DeNero
+# (denero@cs.berkeley.edu) and Dan Klein (klein@cs.berkeley.edu).
+# Student side autograding was added by Brad Miller, Nick Hay, and
+# Pieter Abbeel (pabbeel@cs.berkeley.edu).
+
 # This template was originally adapted to KCL by Simon Parsons, but then
 # revised and updated to Py3 for the 2022 course by Dylan Cope and Lin Li
 
 from __future__ import absolute_import
 from __future__ import print_function
 
+import random
+
 from pacman import Directions, GameState
 from pacman_utils.game import Agent
 from pacman_utils import util
 
-import random
-from collections import defaultdict
-
 
 class GameStateFeatures:
     """
-    Wrapper class around a game state where you can extract
-    useful information for your Q-learning algorithm
+    Represents relevant features of a game state that can be used to identify common state situations
+    and generalize for all game states, not relying on exact locations of all objects.
 
-    WARNING: We will use this class to test your code, but the functionality
-    of this class will not be tested itself
+    We use pacman location relative to food and ghosts to help generalize so can be used for games of
+    all sizes and configurations.
     """
 
     def __init__(self, state: GameState):
@@ -26,34 +46,90 @@ class GameStateFeatures:
         Args:
             state: A given game state object
         """
-
-        "*** YOUR CODE HERE ***"
-        # in my GameStateFeatures class, I extract
-
-        # the position of pacman
-        self.pos = state.getPacmanPosition()
-
-        # the position of ghost
-        self.ghost_pos = tuple(state.getGhostPositions())
-
-        # the coordinate of food
-        self.food_map = state.getFood()
-
-        # the legal actions that pacman can execute in this state (except for Stop)
-        self.legalActions = state.getLegalPacmanActions()
+        # get pacman position
+        self.pacman = state.getPacmanPosition()
+        # get the ghost positions
+        self.ghost = tuple(state.getGhostPositions())
+        # get all the wall positions
+        self.walls = state.getWalls().asList()
+        # get all the food positions
+        self.food = state.getFood().asList()
+        # save legal actions, removing Stop
+        self.legalActions = state.getLegalActions()
         if Directions.STOP in self.legalActions:
             self.legalActions.remove(Directions.STOP)
 
-    # GameStateFeatures object will act as the key in dict,
-    # so must override the __hash__ methond inherited from the object class
+        # find nearest food direction and distance from pacman
+        (distanceToFood, self.foodDirection) = self.findNearest(self.pacman, self.food)
+        # find nearest ghost direction and distance from pacman
+        (distanceToGhost, self.ghostDirection) = self.findNearest(
+            self.pacman, self.ghost
+        )
+
+        # measure distance between nearest ghost and nearest food, when direction is the same
+        if self.ghostDirection != self.foodDirection:
+            self.ghostToFoodDistance = None
+        else:
+            self.ghostToFoodDistance = distanceToGhost - distanceToFood
+
+    def findNearest(self, location, objectsToCompare, distance=0, visited=None):
+        """
+        Find the nearest object to the given location
+        e.g. food or ghost
+        :param location: location to compare e.g (2,1)
+        :param objectsToCompare: object to compare with location, e.g. food or ghost
+        :param distance: distance so far, used internally
+        :param visited: list of locations already visited to avoid revisiting, used internally
+        :return: a tuple of distance to object, and closest direction to reach that object (distance, direction)
+        """
+        maxSearchDepth = 8  # prevent searching further than max search
+        minDist = 1000  # default minimum distance
+
+        # map surrounding directions with coordinates
+        (x, y) = location
+        directionMapping = [
+            ((x, y + 1), Directions.NORTH),
+            ((x, y - 1), Directions.SOUTH),
+            ((x - 1, y), Directions.WEST),
+            ((x + 1, y), Directions.EAST),
+        ]
+
+        if distance == maxSearchDepth or location in objectsToCompare:
+            return distance, None
+
+        if visited is None:
+            visited = [location]
+
+        minDirection = None
+
+        for map in directionMapping:
+            (coord, direction) = map
+            if coord not in self.walls and coord not in visited:
+                (currentDist, _) = self.findNearest(
+                    coord, objectsToCompare, distance + 1, visited + [coord]
+                )
+                if currentDist < minDist and currentDist != maxSearchDepth:
+                    minDist = currentDist
+                    minDirection = direction
+
+        return minDist, minDirection
+
     def __hash__(self):
-        return hash((self.pos, self.ghost_pos, self.food_map))
+        return hash(
+            (
+                self.pacman,
+                self.ghostDirection,
+                self.foodDirection,
+                self.ghostToFoodDistance,
+            )
+        )
 
     def __eq__(self, other):
         return (
-            self.pos == other.pos
-            and self.ghost_pos == other.ghost_pos
-            and self.food_map == other.food_map
+            self.pacman == other.pacman
+            and self.ghostDirection == other.ghostDirection
+            and self.foodDirection == other.foodDirection
+            and self.ghostToFoodDistance == other.ghostToFoodDistance
         )
 
 
@@ -80,32 +156,25 @@ class QLearnAgent(Agent):
             maxAttempts: How many times to try each action in each state
             numTraining: number of training episodes
         """
-
         super().__init__()
         self.alpha = float(alpha)
         self.epsilon = float(epsilon)
         self.gamma = float(gamma)
         self.maxAttempts = int(maxAttempts)
         self.numTraining = int(numTraining)
-
-        # Count the number of games we have played.
+        # Count the number of games we have played
         self.episodesSoFar = 0
 
-        # QValue is a dict which used to store the value of each state-action pair.
-        self.QValue = defaultdict(float)
+        # map states to action rewards
+        self.statesToActionQValues = dict()
+        # map states to action counts
+        self.statesToActionCounter = dict()
+        # define an exploration k value
+        self.explorationKValue = 10
 
-        # Store the last action pacman took, initialized by "West"
-        self.lastAction = "West"
-
-        # Store the last state where pacman stay in, initialized by None
-        self.lastState = None
-
-        # the dict visitedTimes is used to store the action times that pacman has been
-        # taken in a specific state.
-        self.visitedTimes = defaultdict(int)
-
-        # the dict maxActionValue is used to store the max action value in a specific state.
-        self.maxActionValue = defaultdict(int)
+        self.prevAction = None
+        self.prevStateFeatures = None
+        self.prevState = None
 
     # Accessor functions for the variable episodesSoFar controlling learning
     def incrementEpisodesSoFar(self):
@@ -145,7 +214,8 @@ class QLearnAgent(Agent):
         Returns:
             The reward assigned for the given trajectory
         """
-        "*** YOUR CODE HERE ***"
+
+        # simple reward function that compares the score before and after the action taken
         return endState.getScore() - startState.getScore()
 
     # WARNING: You will be tested on the functionality of this method
@@ -159,16 +229,13 @@ class QLearnAgent(Agent):
         Returns:
             Q(state, action)
         """
-        "*** YOUR CODE HERE ***"
-        return self.QValue[(state, action)]
 
-    # Find the action which can get the most value from legalActions
-    def getBestAction(self, state: GameStateFeatures):
-        bestAction = state.legalActions[0]
-        for a in state.legalActions:
-            if self.getQValue(state, a) > self.getQValue(state, bestAction):
-                bestAction = a
-        return bestAction
+        if state not in self.statesToActionQValues:
+            return 0
+        if action not in self.statesToActionQValues[state]:
+            return 0
+
+        return self.statesToActionQValues[state][action]
 
     # WARNING: You will be tested on the functionality of this method
     # DO NOT change the function signature
@@ -180,13 +247,21 @@ class QLearnAgent(Agent):
         Returns:
             q_value: the maximum estimated Q-value attainable from the state
         """
-        "*** YOUR CODE HERE ***"
-        # return the maximum estimated Q-value, note that if pacman
-        # has reached the terminal state, the legal action is an empty list
-        if not state.legalActions:
-            return 0.0
-        else:
-            return max([self.getQValue(state, a) for a in state.legalActions])
+        if state not in self.statesToActionQValues:
+            return 0
+
+        maxQValue = 0
+        for action in self.statesToActionQValues[state]:
+            utility = self.statesToActionQValues[state][action]
+            count = self.getCount(state, action)
+            qValue = max(
+                self.explorationFn(utility, count),
+                self.statesToActionQValues[state][action],
+            )
+            if qValue > maxQValue:
+                maxQValue = qValue
+
+        return maxQValue
 
     # WARNING: You will be tested on the functionality of this method
     # DO NOT change the function signature
@@ -206,21 +281,23 @@ class QLearnAgent(Agent):
             nextState: the resulting state
             reward: the reward received on this trajectory
         """
-        "*** YOUR CODE HERE ***"
-        # the value of last state-action pair
-        QValue_last = self.getQValue(state, action)
 
-        # the most value pacman can get in this state, here,
-        # pacman emploies the greedy policy, so take the maximum
-        maxQValue_current = self.maxQValue(nextState)
+        # get current q-value
+        currentQValue = self.getQValue(state, action)
 
-        # the iteration equation of Q learning algorithm
-        new_QValue = QValue_last + self.getAlpha() * (
-            reward + self.getGamma() * maxQValue_current - QValue_last
-        )
+        # the best q-value available in the next state
+        maxQValue = self.maxQValue(nextState)
 
-        # update the new value of state-action pair
-        self.QValue[(state, action)] = new_QValue
+        # derive new q-value
+        a = self.getAlpha()
+        g = self.getGamma()
+        newQValue = currentQValue + a * (reward + g * maxQValue - currentQValue)
+
+        # update the q-value
+        if state in self.statesToActionQValues:
+            self.statesToActionQValues[state][action] = newQValue
+        else:
+            self.statesToActionQValues[state] = {action: newQValue}
 
     # WARNING: You will be tested on the functionality of this method
     # DO NOT change the function signature
@@ -232,8 +309,13 @@ class QLearnAgent(Agent):
             state: Starting state
             action: Action taken
         """
-        "*** YOUR CODE HERE ***"
-        self.visitedTimes[(state, action)] += 1
+        if state in self.statesToActionCounter:
+            if action in self.statesToActionCounter[state]:
+                self.statesToActionCounter[state][action] += 1
+            else:
+                self.statesToActionCounter[state][action] = 1
+        else:
+            self.statesToActionCounter[state] = {action: 1}
 
     # WARNING: You will be tested on the functionality of this method
     # DO NOT change the function signature
@@ -246,8 +328,11 @@ class QLearnAgent(Agent):
         Returns:
             Number of times that the action has been taken in a given state
         """
-        "*** YOUR CODE HERE ***"
-        return self.visitedTimes[(state, action)]
+        if state in self.statesToActionCounter:
+            if action in self.statesToActionCounter[state]:
+                return self.statesToActionCounter[state][action]
+
+        return 0
 
     # WARNING: You will be tested on the functionality of this method
     # DO NOT change the function signature
@@ -265,13 +350,14 @@ class QLearnAgent(Agent):
         Returns:
             The exploration value
         """
-        "*** YOUR CODE HERE ***"
-        if counts < self.getMaxAttempts():
-            return self.maxActionValue[
-                (GameStateFeatures(self.lastState), self.lastAction)
-            ]
-        else:
-            return utility
+
+        # if unexplored return maximum k-value
+        if counts == 0:
+            return utility + self.explorationKValue
+
+        # otherwise return utility + weighted exploration value so unexplored actions
+        # are more likely to be explored
+        return utility + self.explorationKValue / counts
 
     # WARNING: You will be tested on the functionality of this method
     # DO NOT change the function signature
@@ -289,34 +375,54 @@ class QLearnAgent(Agent):
         Returns:
             The action to take
         """
-        # Due to the lastState initialized by None, so in the first
-        # episode we assign the current state to lastState (avoid null pointer exception)
-        if self.lastState is None:
-            self.lastState = state
 
-        # Encapsulate lastState and state into GameStateFeatures class
-        # which has already extracted features.
-        lastStateFeatures = GameStateFeatures(self.lastState)
         currentStateFeatures = GameStateFeatures(state)
 
-        # Compute the reward between lastState and current state
-        reward = self.computeReward(self.lastState, state)
+        # Compute the reward between previous state and current state
+        if self.prevState is not None:
+            reward = self.computeReward(self.prevState, state)
+            # Learn from previous action
+            self.learn(
+                self.prevStateFeatures, self.prevAction, reward, currentStateFeatures
+            )
 
-        # Update the Qvalue of last state and last action
-        self.learn(lastStateFeatures, self.lastAction, reward, currentStateFeatures)
-
-        # if the probabiliy is less than epsilon(0.05), executes exploration
+        # determine whether to exploit or explore
         if util.flipCoin(self.epsilon):
+            # explore
             action = random.choice(currentStateFeatures.legalActions)
-        # otherwise, pacman choose the best action from current state, that is, exploitation
         else:
-            action = self.getBestAction(currentStateFeatures)
+            # otherwise, exploit
+            action = self.findBestAction(currentStateFeatures)
 
-        # Store the current state for the next iteration
-        self.lastState = state
-        self.lastAction = action
+        # update action counts
+        self.updateCount(self.prevStateFeatures, action)
+
+        # record current state for next iteration
+        self.prevStateFeatures = currentStateFeatures
+        self.prevState = state
+        self.prevAction = action
 
         return action
+
+    def findBestAction(self, state: GameStateFeatures) -> Directions:
+        """
+        Finds the best action to take.
+        :param state: current state
+        :return: best direction to take
+        """
+        vals = self.statesToActionQValues
+        bestAction = None
+        bestQValue = None
+        if state in vals:
+            for action, value in vals[state].items():
+                if bestQValue is None or value > bestQValue:
+                    bestQValue = value
+                    bestAction = action
+
+            return bestAction
+
+        # no action available, make it random
+        return random.choice(state.legalActions)
 
     def final(self, state: GameState):
         """
@@ -326,18 +432,17 @@ class QLearnAgent(Agent):
         Args:
             state: the final game state
         """
-        reward = self.computeReward(self.lastState, state)
 
-        # When pacman reaches terminal state,
-        # update the value of last State-action pair in this episode
+        # calculate reward for last move
+        reward = self.computeReward(self.prevState, state)
+
+        # update learning
         self.learn(
-            GameStateFeatures(self.lastState),
-            self.lastAction,
-            reward,
-            GameStateFeatures(state),
+            self.prevStateFeatures, self.prevAction, reward, GameStateFeatures(state)
         )
 
         print(f"Game {self.getEpisodesSoFar()} just ended!")
+
         # Keep track of the number of games played, and set learning
         # parameters to zero when we are done with the pre-set number
         # of training episodes
