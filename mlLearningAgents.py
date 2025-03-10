@@ -14,7 +14,7 @@ import sys
 class GameStateFeatures:
     """Wrapper class around a game state for Q-learning algorithm"""
 
-    def __init__(self, state: GameState):
+    def __init__(self, state: GameState) -> None:
         self.pos: Tuple[int, int] = state.getPacmanPosition()
 
         self.ghost_pos: Tuple[Tuple[float, float], ...] = tuple(
@@ -44,7 +44,9 @@ class GameStateFeatures:
 class QLearner:
     """Handles the Q-learning algorithm logic"""
 
-    def __init__(self, alpha: float, epsilon: float, gamma: float, maxAttempts: int):
+    def __init__(
+        self, alpha: float, epsilon: float, gamma: float, maxAttempts: int
+    ) -> None:
         # Learning hyperparameters
         self.alpha: float = alpha
         self.epsilon: float = epsilon
@@ -110,7 +112,7 @@ class QLearner:
         if not state.legalActions:
             return Directions.STOP
 
-        bestAction = state.legalActions[0]
+        bestAction: str = state.legalActions[0]
         for a in state.legalActions:
             if self.getQValue(state, a) > self.getQValue(state, bestAction):
                 bestAction = a
@@ -268,7 +270,7 @@ class QLearnAgent(Agent):
 
         if self.getEpisodesSoFar() < self.getNumTraining():
             sys.stdout.write(
-                f"\rEpisode {self.getEpisodesSoFar()}/{self.getNumTraining()} ended!"
+                f"\rEpisode {self.getEpisodesSoFar()}/{self.getNumTraining()}"
             )
             sys.stdout.flush()
 
@@ -277,7 +279,7 @@ class QLearnAgent(Agent):
         # of training episodes
         self.incrementEpisodesSoFar()
         if self.getEpisodesSoFar() == self.getNumTraining():
-            msg = "Training Done (turning off epsilon and alpha)"
+            msg = "\nTraining Done (turning off epsilon and alpha)"
             print("%s\n%s" % (msg, "-" * len(msg)))
             self.setAlpha(0)
             self.setEpsilon(0)
