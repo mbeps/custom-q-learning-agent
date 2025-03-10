@@ -1,14 +1,13 @@
-from __future__ import absolute_import
-from __future__ import print_function
+from __future__ import absolute_import, print_function
 
 import random
 import sys
 from collections import defaultdict
-from typing import Any, DefaultDict, List, Optional, Set, Tuple
+from typing import DefaultDict, List, Optional, Tuple
 
 from pacman import Directions, GameState
-from pacman_utils.game import Agent
 from pacman_utils import util
+from pacman_utils.game import Agent, Grid
 
 
 class GameStateFeatures:
@@ -17,7 +16,7 @@ class GameStateFeatures:
     useful information for your Q-learning algorithm.
 
     This implementation focuses on relational features (directions to objects)
-    rather than just absolute positions to improve generalization.
+    rather than just absolute positions to improve generalisation.
 
     WARNING: We will use this class to test your code, but the functionality
     of this class will not be tested itself
@@ -25,6 +24,8 @@ class GameStateFeatures:
 
     def __init__(self, state: GameState) -> None:
         """
+        Initialise the game state features with the given game state.
+
         Args:
             state: A given game state object
         """
@@ -33,12 +34,12 @@ class GameStateFeatures:
         self.ghost_pos: Tuple[Tuple[float, float], ...] = tuple(
             state.getGhostPositions()
         )
-        self.walls = state.getWalls().asList()
+        self.walls: list = state.getWalls().asList()
 
         # Get food data
-        food_grid = state.getFood()
-        self.food = food_grid.asList()
-        self.food_map = food_grid  # Keep the actual grid for comparison
+        food_grid: Grid[bool] = state.getFood()
+        self.food: list = food_grid.asList()
+        self.food_map: Grid[bool] = food_grid
         self.food_count: int = food_grid.count()
 
         # Legal actions excluding STOP
@@ -103,12 +104,12 @@ class GameStateFeatures:
         Returns:
             Tuple of (distance to nearest object, direction to move)
         """
-        max_search_depth = 8  # Prevent searching too far
-        min_dist = 1000  # Default minimum distance
+        max_search_depth: int = 8  # Prevent searching too far
+        min_dist: int = 1000  # Default minimum distance
 
         # Map surrounding directions with coordinates
         (x, y) = location
-        direction_mapping = [
+        direction_mapping: List[Tuple[Tuple[int] | str]] = [
             ((x, y + 1), Directions.NORTH),
             ((x, y - 1), Directions.SOUTH),
             ((x - 1, y), Directions.WEST),
@@ -122,7 +123,7 @@ class GameStateFeatures:
         if visited is None:
             visited = [location]
 
-        min_direction = None
+        min_direction: str = None
 
         for coord, direction in direction_mapping:
             if coord not in self.walls and coord not in visited:
@@ -138,7 +139,7 @@ class GameStateFeatures:
     def __hash__(self) -> int:
         """
         Hash function based on relational features rather than just absolute positions
-        for better state generalization
+        for better state generalisation
         """
         return hash(
             (
@@ -150,7 +151,7 @@ class GameStateFeatures:
             )
         )
 
-    def __eq__(self, other: Any) -> bool:
+    def __eq__(self, other: GameState) -> bool:
         """
         Equality based on relational features rather than exact coordinates
 
@@ -179,7 +180,7 @@ class QLearner:
         self, alpha: float, epsilon: float, gamma: float, maxAttempts: int
     ) -> None:
         """
-        Initialize the Q-learning algorithm parameters and data structures
+        Initialise the Q-learning algorithm parameters and data structures
 
         Args:
             alpha: Learning rate
@@ -193,17 +194,13 @@ class QLearner:
         self.gamma: float = gamma
         self.maxAttempts: int = maxAttempts
 
-        # Optimistic initialization to small positive values for better exploration
+        # Optimistic initialisation to small positive values for better exploration
         self.QValue: DefaultDict[Tuple[GameStateFeatures, str], float] = defaultdict(
             lambda: 1.0
         )
-
-        # Visit counter for state-action pairs
         self.visitedTimes: DefaultDict[Tuple[GameStateFeatures, str], int] = (
             defaultdict(int)
         )
-
-        # Exploration constant
         self.exploration_k_value: float = 10.0
 
     def getQValue(self, state: GameStateFeatures, action: str) -> float:
@@ -232,7 +229,6 @@ class QLearner:
         if not state.legalActions:
             return 0.0
 
-        # Return the highest Q-value among all legal actions
         return max([self.getQValue(state, a) for a in state.legalActions])
 
     def learn(
@@ -244,7 +240,7 @@ class QLearner:
     ) -> None:
         """
         Performs a Q-learning update using the standard Q-learning formula:
-        Q(s,a) = Q(s,a) + α * [R + γ * max_a' Q(s',a') - Q(s,a)]
+        Q(s,a) = Q(s,a) + alpha * [R + gamma * max_a' Q(s',a') - Q(s,a)]
 
         Args:
             state: Current state
@@ -290,6 +286,8 @@ class QLearner:
         """
         Computes the exploration function value, combining both the current utility
         and an exploration bonus based on visit counts.
+        If an action is never tried, it is strongly encouraged to explore it.
+        Otherwise, the exploration bonus decays as the state-action pair is visited more.
 
         Args:
             utility: Q-value for the state-action pair
@@ -303,8 +301,6 @@ class QLearner:
             return float("inf")
 
         # Otherwise balance exploration and exploitation
-        # Using square root to make the exploration bonus decay more slowly
-        # as the state-action pair is visited more times
         return utility + (self.exploration_k_value / (counts**0.5))
 
     def getBestAction(self, state: GameStateFeatures) -> str:
@@ -349,8 +345,7 @@ class QLearner:
         if util.flipCoin(self.epsilon):
             return random.choice(state.legalActions)
 
-        # Otherwise, use count-based exploration to balance
-        # exploration and exploitation
+        # Otherwise, use count-based exploration to balance exploration and exploitation
         return max(
             state.legalActions,
             key=lambda a: self.explorationFn(
@@ -360,6 +355,11 @@ class QLearner:
 
 
 class QLearnAgent(Agent):
+    """
+    Q-learning agent for playing Pacman. Implements the Q-learning algorithm
+    to learn optimal policies through experience.
+    """
+
     def __init__(
         self,
         alpha: float = 0.2,
@@ -369,18 +369,17 @@ class QLearnAgent(Agent):
         numTraining: int = 10,
     ) -> None:
         """
+        Initialise the Q-learning agent with learning parameters.
+
         These values are either passed from the command line (using -a alpha=0.5,...)
         or are set to the default values above.
 
-        The given hyperparameters are suggestions and are not necessarily optimal
-        so feel free to experiment with them.
-
         Args:
-            alpha: learning rate
-            epsilon: exploration rate
-            gamma: discount factor
+            alpha: Learning rate
+            epsilon: Exploration rate
+            gamma: Discount factor
             maxAttempts: How many times to try each action in each state
-            numTraining: number of training episodes
+            numTraining: Number of training episodes
         """
         super().__init__()
         self.alpha: float = float(alpha)
@@ -394,7 +393,7 @@ class QLearnAgent(Agent):
         self.initial_alpha: float = float(alpha)
 
         # Count the number of games we have played
-        self.episodesSoFar: int = 0
+        self.episodesCount: int = 0
 
         # Create Q-learner instance to handle the learning algorithm
         self.qLearner: QLearner = QLearner(
@@ -404,58 +403,87 @@ class QLearnAgent(Agent):
             maxAttempts=self.maxAttempts,
         )
 
-        # Store the last action pacman took, initialized to a default value
+        # Store the last action pacman took, initialised to a default value
         self.lastAction: str = Directions.WEST
 
         # Store the last state where pacman was
         self.lastState: Optional[GameState] = None
 
-    # Accessor functions for the variable episodesSoFar controlling learning
     def incrementEpisodesSoFar(self) -> None:
-        """Increment episode counter"""
-        self.episodesSoFar += 1
+        """
+        Increment the counter for episodes completed.
+        """
+        self.episodesCount += 1
 
     def getEpisodesSoFar(self) -> int:
-        """Get the number of episodes completed"""
-        return self.episodesSoFar
+        """
+        Get the number of episodes completed.
+
+        Returns:
+            Number of episodes completed
+        """
+        return self.episodesCount
 
     def getNumTraining(self) -> int:
-        """Get the number of training episodes"""
+        """
+        Get the number of training episodes.
+
+        Returns:
+            Number of training episodes
+        """
         return self.numTraining
 
-    # Accessor functions for parameters
     def setEpsilon(self, value: float) -> None:
         """
-        Set the exploration rate and update the Q-learner's epsilon too
+        Set the exploration rate and update the Q-learner's epsilon too.
+
+        Args:
+            value: New exploration rate
         """
         self.epsilon = value
         self.qLearner.epsilon = value
 
     def getAlpha(self) -> float:
-        """Get the learning rate"""
+        """
+        Get the learning rate.
+
+        Returns:
+            Learning rate
+        """
         return self.alpha
 
     def setAlpha(self, value: float) -> None:
         """
-        Set the learning rate and update the Q-learner's alpha too
+        Set the learning rate and update the Q-learner's alpha too.
+
+        Args:
+            value: New learning rate
         """
         self.alpha = value
         self.qLearner.alpha = value
 
     def getGamma(self) -> float:
-        """Get the discount factor"""
+        """
+        Get the discount factor.
+
+        Returns:
+            Discount factor
+        """
         return self.gamma
 
     def getMaxAttempts(self) -> int:
-        """Get the maximum number of attempts for exploration"""
+        """
+        Get the maximum number of attempts for exploration.
+
+        Returns:
+            Maximum number of attempts
+        """
         return self.maxAttempts
 
-    # WARNING: You will be tested on the functionality of this method
-    # DO NOT change the function signature
     @staticmethod
     def computeReward(startState: GameState, endState: GameState) -> float:
         """
-        Compute the reward for a transition as the score difference
+        Compute the reward for a transition as the score difference.
 
         Args:
             startState: Starting game state
@@ -467,11 +495,9 @@ class QLearnAgent(Agent):
         # Simple reward function that compares the score before and after the action
         return endState.getScore() - startState.getScore()
 
-    # WARNING: You will be tested on the functionality of this method
-    # DO NOT change the function signature
     def getQValue(self, state: GameStateFeatures, action: Directions) -> float:
         """
-        Get the Q-value for a state-action pair
+        Get the Q-value for a state-action pair.
 
         Args:
             state: State features
@@ -482,11 +508,9 @@ class QLearnAgent(Agent):
         """
         return self.qLearner.getQValue(state, action)
 
-    # WARNING: You will be tested on the functionality of this method
-    # DO NOT change the function signature
     def maxQValue(self, state: GameStateFeatures) -> float:
         """
-        Get the maximum Q-value for a state
+        Get the maximum Q-value for a state.
 
         Args:
             state: State features
@@ -496,8 +520,6 @@ class QLearnAgent(Agent):
         """
         return self.qLearner.maxQValue(state)
 
-    # WARNING: You will be tested on the functionality of this method
-    # DO NOT change the function signature
     def learn(
         self,
         state: GameStateFeatures,
@@ -506,7 +528,7 @@ class QLearnAgent(Agent):
         nextState: GameStateFeatures,
     ) -> None:
         """
-        Update Q-values based on transition
+        Update Q-values based on transition.
 
         Args:
             state: Current state
@@ -516,11 +538,9 @@ class QLearnAgent(Agent):
         """
         self.qLearner.learn(state, action, reward, nextState)
 
-    # WARNING: You will be tested on the functionality of this method
-    # DO NOT change the function signature
     def updateCount(self, state: GameStateFeatures, action: Directions) -> None:
         """
-        Update visit counts for a state-action pair
+        Update visit counts for a state-action pair.
 
         Args:
             state: Current state
@@ -528,11 +548,9 @@ class QLearnAgent(Agent):
         """
         self.qLearner.updateCount(state, action)
 
-    # WARNING: You will be tested on the functionality of this method
-    # DO NOT change the function signature
     def getCount(self, state: GameStateFeatures, action: Directions) -> int:
         """
-        Get visit count for a state-action pair
+        Get visit count for a state-action pair.
 
         Args:
             state: Current state
@@ -543,11 +561,9 @@ class QLearnAgent(Agent):
         """
         return self.qLearner.getCount(state, action)
 
-    # WARNING: You will be tested on the functionality of this method
-    # DO NOT change the function signature
     def explorationFn(self, utility: float, counts: int) -> float:
         """
-        Compute exploration function value
+        Compute exploration function value.
 
         Args:
             utility: Q-value
@@ -558,25 +574,22 @@ class QLearnAgent(Agent):
         """
         return self.qLearner.explorationFn(utility, counts)
 
-    # WARNING: You will be tested on the functionality of this method
-    # DO NOT change the function signature
     def getAction(self, state: GameState) -> Directions:
         """
         Choose an action to take to maximise reward while
-        balancing gathering data for learning
+        balancing gathering data for learning.
 
         Args:
-            state: the current state
+            state: The current game state
 
         Returns:
             The action to take
         """
         # The data we have about the state of the game
-        legal = state.getLegalPacmanActions()
+        legal: list = state.getLegalPacmanActions()
         if Directions.STOP in legal:
             legal.remove(Directions.STOP)
 
-        # Initialize last state if this is the first action
         if self.lastState is None:
             self.lastState = state
             # For the first action, create features and choose based on exploration
@@ -585,20 +598,11 @@ class QLearnAgent(Agent):
             self.lastAction = action
             return action
 
-        # Create feature representations
         lastStateFeatures = GameStateFeatures(self.lastState)
         currentStateFeatures = GameStateFeatures(state)
-
-        # Calculate reward from last action
         reward: float = self.computeReward(self.lastState, state)
-
-        # Update Q-values based on last action and reward
         self.learn(lastStateFeatures, self.lastAction, reward, currentStateFeatures)
-
-        # Choose action based on exploration strategy
         action: str = self.qLearner.getExplorationAction(currentStateFeatures)
-
-        # Update visit counts
         self.updateCount(currentStateFeatures, action)
 
         # Remember current state and action for next step
@@ -609,20 +613,19 @@ class QLearnAgent(Agent):
 
     def final(self, state: GameState) -> None:
         """
-        Handle the end of episodes.
-        This is called by the game after a win or a loss.
+        Handle the end of episodes. This is called by the game after a win or a loss.
+        Updates Q-values and adjusts learning parameters.
 
         Args:
-            state: the final game state
+            state: The final game state
         """
-        # Calculate final reward
-        reward: float = self.computeReward(self.lastState, state)
+        finalReward: float = self.computeReward(self.lastState, state)
 
         # Final update to Q-values
         self.learn(
             GameStateFeatures(self.lastState),
             self.lastAction,
-            reward,
+            finalReward,
             GameStateFeatures(state),
         )
 
@@ -642,9 +645,6 @@ class QLearnAgent(Agent):
             )
             sys.stdout.flush()
 
-        # Keep track of the number of games played, and set learning
-        # parameters to zero when we are done with the pre-set number
-        # of training episodes
         self.incrementEpisodesSoFar()
         if self.getEpisodesSoFar() == self.getNumTraining():
             msg = "Training Done (turning off epsilon and alpha)"
