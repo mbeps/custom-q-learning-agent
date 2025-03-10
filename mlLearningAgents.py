@@ -1,14 +1,13 @@
-from __future__ import absolute_import
-from __future__ import print_function
-
-from pacman import Directions, GameState
-from pacman_utils.game import Agent
-from pacman_utils import util
+from __future__ import absolute_import, print_function
 
 import random
-from collections import defaultdict
-from typing import Dict, Tuple, List, Optional, DefaultDict, Any
 import sys
+from collections import defaultdict
+from typing import Any, DefaultDict, List, Optional, Tuple
+
+from pacman import Directions, GameState
+from pacman_utils import util
+from pacman_utils.game import Agent
 
 
 class GameStateFeatures:
@@ -20,6 +19,57 @@ class GameStateFeatures:
         self.ghost_pos: Tuple[Tuple[float, float], ...] = tuple(
             state.getGhostPositions()
         )
+
+        # Enhanced features for better state representation
+        food_grid = state.getFood()
+        food_positions: List[Tuple[int]] = [
+            (x, y)
+            for x in range(food_grid.width)
+            for y in range(food_grid.height)
+            if food_grid[x][y]
+        ]
+
+        # Distance to closest food
+        if food_positions:
+            self.closest_food_dist: int = min(
+                util.manhattanDistance(self.pos, food_pos)
+                for food_pos in food_positions
+            )
+        else:
+            self.closest_food_dist = 0
+
+        # Distance to closest ghost
+        if self.ghost_pos:
+            self.closest_ghost_dist = min(
+                util.manhattanDistance(self.pos, ghost_pos)
+                for ghost_pos in self.ghost_pos
+            )
+        else:
+            self.closest_ghost_dist = 99  # Large value if no ghosts
+
+        # Improved directional ghost danger features
+        x, y = self.pos
+        if self.ghost_pos:
+            # Calculate danger in each direction
+            self.ghost_danger_north: float = min(
+                [util.manhattanDistance((x, y + 1), ghost) for ghost in self.ghost_pos]
+                + [999]
+            )
+            self.ghost_danger_south: float = min(
+                [util.manhattanDistance((x, y - 1), ghost) for ghost in self.ghost_pos]
+                + [999]
+            )
+            self.ghost_danger_east: float = min(
+                [util.manhattanDistance((x + 1, y), ghost) for ghost in self.ghost_pos]
+                + [999]
+            )
+            self.ghost_danger_west: float = min(
+                [util.manhattanDistance((x - 1, y), ghost) for ghost in self.ghost_pos]
+                + [999]
+            )
+
+        # Food count feature
+        self.food_count: int = food_grid.count()
 
         self.food_map = state.getFood()
 
@@ -53,8 +103,9 @@ class QLearner:
         self.gamma: float = gamma
         self.maxAttempts: int = maxAttempts
 
+        # Optimistic initialization to small positive values
         self.QValue: DefaultDict[Tuple[GameStateFeatures, str], float] = defaultdict(
-            float
+            lambda: 1.0
         )
 
         self.visitedTimes: DefaultDict[Tuple[GameStateFeatures, str], int] = (
@@ -82,7 +133,7 @@ class QLearner:
         """Performs a Q-learning update"""
         QValue_last: float = self.getQValue(state, action)
 
-        maxQValue_current = self.maxQValue(nextState)
+        maxQValue_current: float = self.maxQValue(nextState)
 
         new_QValue: float = QValue_last + self.alpha * (
             reward + self.gamma * maxQValue_current - QValue_last
@@ -100,23 +151,31 @@ class QLearner:
         return self.visitedTimes[(state, action)]
 
     def explorationFn(self, utility: float, counts: int) -> float:
-        """Computes the exploration function value"""
+        """Computes the exploration function value with more aggressive exploration"""
         if counts == 0:
             return float("inf")  # Strong incentive to explore never-visited actions
 
-        # Balance exploitation with exploration
-        return utility + (self.maxAttempts / (counts + 1))
+        # Improved balance of exploitation with exploration
+        # Using square root to make the exploration bonus decay more slowly
+        return utility + (self.maxAttempts / (counts**0.5))
 
     def getBestAction(self, state: GameStateFeatures) -> str:
-        """Returns the best action from legal actions based on Q-values"""
+        """Improved best action selection with tie-breaking"""
         if not state.legalActions:
             return Directions.STOP
 
-        bestAction: str = state.legalActions[0]
-        for a in state.legalActions:
-            if self.getQValue(state, a) > self.getQValue(state, bestAction):
-                bestAction = a
-        return bestAction
+        # Get all actions with maximum Q-value (might be multiple)
+        qValues: List[Tuple[str | float]] = [
+            (a, self.getQValue(state, a)) for a in state.legalActions
+        ]
+        maxValue: float = max(qValues, key=lambda x: x[1])[1]
+        bestActions: List[str | float] = [a for a, v in qValues if v == maxValue]
+
+        # If multiple actions have the same value, break ties with exploration counts
+        if len(bestActions) > 1:
+            return min(bestActions, key=lambda a: self.getCount(state, a))
+
+        return bestActions[0]
 
     def getExplorationAction(self, state: GameStateFeatures) -> str:
         """Returns an action based on exploration strategy"""
@@ -148,6 +207,10 @@ class QLearnAgent(Agent):
         self.gamma: float = float(gamma)
         self.maxAttempts: int = int(maxAttempts)
         self.numTraining: int = int(numTraining)
+
+        # Store initial values for adaptive parameters
+        self.initial_epsilon: float = float(epsilon)
+        self.initial_alpha: float = float(alpha)
 
         # Count the number of games we have played
         self.episodesSoFar: int = 0
@@ -268,9 +331,19 @@ class QLearnAgent(Agent):
             GameStateFeatures(state),
         )
 
+        # Adjust epsilon and alpha based on training progress
         if self.getEpisodesSoFar() < self.getNumTraining():
+            # Linearly decrease epsilon from initial value to 0.01
+            progress: float = self.getEpisodesSoFar() / self.getNumTraining()
+            new_epsilon: float = max(0.01, self.initial_epsilon * (1.0 - progress))
+            self.setEpsilon(new_epsilon)
+
+            # Also adapt alpha based on training progress
+            new_alpha: float = max(0.1, self.initial_alpha * (1.0 - progress * 0.5))
+            self.setAlpha(new_alpha)
+
             sys.stdout.write(
-                f"\rEpisode {self.getEpisodesSoFar()}/{self.getNumTraining()}"
+                f"\rEpisode {self.getEpisodesSoFar() + 1}/{self.getNumTraining()}"
             )
             sys.stdout.flush()
 
